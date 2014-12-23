@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+import socket
+import xmltodict
+import json
+from nxapi_lib import *
+
+def main():
+    
+    module = AnsibleModule(
+        argument_spec = dict(
+            vlan_id=dict(required=True, type='str'),
+            name=dict(default=None),
+            vlan_state=dict(default='active',choices=['active','suspend']),
+            state=dict(default='present',choices=['present','absent']),
+            admin_state=dict(default='up',choices=['up', 'down']),
+            host=dict(required=True),
+            username=dict(default='cisco'),
+            password=dict(default='!cisco123!'),
+        ),
+        supports_check_mode=False
+    )   
+
+    host = socket.gethostbyname(module.params['host'])
+    un = module.params['username']
+    pw = module.params['password']
+
+    vlan_id = module.params['vlan_id']
+    name = module.params['name']
+    vlan_state = module.params['vlan_state']
+    admin_state = module.params['admin_state']
+
+    state = module.params['state']
+
+    device = Device(ip=host,username=un,password=pw)
+    device.open()
+
+    changed = False
+    dry_run = False
+
+
+    proposed = dict(vlan_id=vlan_id,name=name,vlan_state=vlan_state,admin_state=admin_state)
+
+    proposed_vlans_list = get_vlan_list(vlan_id)
+    proposed_vlans_list.sort()
+
+    existing_vlans_list = get_list_of_vlans(device)
+    existing_vlans_list.sort()
+
+    vlans_delta = set(proposed_vlans_list).difference(existing_vlans_list)
+
+    vlans_common = set(proposed_vlans_list).intersection(existing_vlans_list)
+
+    errors = []
+    if len(proposed_vlans_list) > 1:
+        if state == 'present':
+            find = proposed.get('name',None)
+            if find and vlans_delta:
+                proposed.pop('name')
+                errors.append("can't set name to multiple vlans")
+        elif state == 'absent':
+            vlans_delta = vlans_common
+    else:
+        vlans_delta = proposed_vlans_list
+
+    final_existing = {}
+    final_proposed = {}
+    final_commands = {}   
+    final_postrun = {} 
+
+    for vlan in vlans_delta:
+
+        existing = getVLAN(device,vlan)
+
+        delta = set()
+        commands = []
+        if state == 'absent':
+            if existing:
+                command = deleteVLAN(device,vlan)
+                commands.append(command)
+                changed = True  
+        elif state == 'present':
+            
+            delta = set(proposed.iteritems()).difference(existing.iteritems())
+            if not existing or delta:
+                command = configVLAN(device,delta,vlan)
+                commands.append(command)
+                changed = True
+
+        if commands:
+            for each in commands:
+                cmds = converttoCiscostring(each)
+            final_commands[vlan] = cmds
+        
+        final_existing[vlan] = existing
+        final_proposed[vlan] = dict(vlan_id=vlan,vlan_state=vlan_state,admin_state=admin_state)
+    
+
+    if state =='absent' and vlan_id == '1':
+        final_commands = None
+        errors.append("you can't remove vlan 1, doh!")
+        results['changed'] = False 
+
+    if final_commands and dry_run == False:
+        for vlan,commands in final_commands.iteritems():
+            push = device.config(commands)
+        for vlan in vlans_delta:
+            postrun = getVLAN(device,vlan)
+            final_postrun[vlan] = postrun
+    
+    results = {}
+    results['proposed'] = proposed
+    results['existing'] = final_existing
+    results['new'] = final_postrun
+    results['state'] = state
+    results['commands'] = final_commands
+    if errors:
+        results['errors'] = errors
+    results['changed'] = changed
+    #print json.dumps(results,indent=4)
+    
+    module.exit_json(**results)
+
+from ansible.module_utils.basic import *  
+main()

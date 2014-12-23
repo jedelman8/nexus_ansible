@@ -1,0 +1,31 @@
+---
+
+-  name: automating nexus switches
+   hosts: spine
+   connection: local
+   gather_facts: no
+
+   tasks:
+
+     - name: config interfaces for vpc peer link
+       nxapi_interface: interface={{ item }} description='N9K1 to N9K2 (peer link)' mode=layer2 host={{ inventory_hostname }}
+       with_items:
+         - Ethernet1/1
+         - Ethernet1/2
+
+     - name: config interface for vpc peer keeaplive link
+       nxapi_interface: interface={{ item }} description='N9K1 to N9K2 (peer keepalive link)' mode=layer2 host={{ inventory_hostname }}
+       with_items:
+         - Ethernet2/12
+
+     - name: config downlinks to leaf switches (only doing for 1 now)
+       nxapi_interface: interface=Ethernet2/1 description='connects to 3K' mode=layer2 host={{ inventory_hostname }}
+
+     - name: ensure proper vlans are deployed
+       nxapi_vlan: vlan_id={{ item.vlan_id }} name={{ item.name }} host={{ inventory_hostname }} state=present
+       with_items:
+         - vlan_id: 10
+           name: web
+         - vlan_id: 20
+           name: app
+         - { vlan_id: 30, name: db }
